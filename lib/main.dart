@@ -1,13 +1,17 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:fl_chart/fl_chart.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:workmanager/workmanager.dart';
 
 /// Unique name for our background task.
 const String scanTask = "backgroundBluetoothScanTask";
+/// Key used for storing background scan batches.
+const String bgScanKey = "bg_scan_batches";
 
 @pragma('vm:entry-point')
 void callbackDispatcher() {
@@ -41,8 +45,21 @@ void callbackDispatcher() {
         }
       }
       double avgRssi = count > 0 ? sumRssi / count : 0;
-
       debugPrint("Background scan completed: count = $count, avg RSSI = $avgRssi");
+
+      // Create a summary map.
+      Map<String, dynamic> summary = {
+        'timestamp': DateTime.now().toIso8601String(),
+        'count': count,
+        'avgRssi': avgRssi,
+      };
+
+      // Save the background scan summary to persistent storage.
+      SharedPreferences prefs = await SharedPreferences.getInstance();
+      List<String> stored =
+          prefs.getStringList(bgScanKey) ?? <String>[];
+      stored.add(jsonEncode(summary));
+      await prefs.setStringList(bgScanKey, stored);
     }
     return Future.value(true);
   });
@@ -64,6 +81,45 @@ Future<void> main() async {
   runApp(MyApp());
 }
 
+/// New model for storing scan batch details.
+/// For foreground scans, full results are available;
+/// for background scans, only summary details are stored.
+class ScanBatch {
+  final DateTime timestamp;
+  // For foreground scans, full raw results are stored.
+  // For background scans, this is null.
+  final List<ScanResult>? results;
+  // Summary fields (used when results is null)
+  final int? count;
+  final double? avgRssi;
+
+  ScanBatch({
+    required this.timestamp,
+    this.results,
+    this.count,
+    this.avgRssi,
+  });
+
+  /// Create a ScanBatch from a stored JSON summary (background scan).
+  factory ScanBatch.fromSummary(Map<String, dynamic> json) {
+    return ScanBatch(
+      timestamp: DateTime.parse(json['timestamp']),
+      count: json['count'],
+      avgRssi: (json['avgRssi'] as num).toDouble(),
+      results: null,
+    );
+  }
+
+  /// Convert the summary to JSON.
+  Map<String, dynamic> toSummaryJson() {
+    return {
+      'timestamp': timestamp.toIso8601String(),
+      'count': count,
+      'avgRssi': avgRssi,
+    };
+  }
+}
+
 /// Main app widget.
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
@@ -77,17 +133,8 @@ class MyApp extends StatelessWidget {
   }
 }
 
-/// New model storing the raw results for each scan with timestamp.
-class ScanBatch {
-  final DateTime timestamp;
-  final List<ScanResult> results;
-  ScanBatch({
-    required this.timestamp,
-    required this.results,
-  });
-}
-
-/// HomePage handles Bluetooth scanning in the foreground, data collection, filtering, and charting.
+/// HomePage handles Bluetooth scanning in the foreground,
+/// merges in background-saved scan results, filtering, and charting.
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
   @override
@@ -97,7 +144,9 @@ class HomePage extends StatefulWidget {
 class HomePageState extends State<HomePage> {
   // Store each scan’s raw batch.
   List<ScanBatch> _scanBatches = [];
-  // Latest scan results for list view.
+  // Add this flag as a class member within HomePageState:
+  bool _isScanning = false;
+  // Latest scan results for list view (foreground scans).
   List<ScanResult> devices = [];
   Timer? _timer;
   PermissionStatus permissions = PermissionStatus.denied;
@@ -114,6 +163,8 @@ class HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
+    // First, load background scan batches from storage.
+    _loadBackgroundBatches();
     _checkPermissions().then((granted) {
       if (!mounted) return;
       if (granted) {
@@ -141,24 +192,28 @@ class HomePageState extends State<HomePage> {
     super.dispose();
   }
 
+  /// Load background scan batches (summary) from SharedPreferences
+  Future<void> _loadBackgroundBatches() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    List<String> stored = prefs.getStringList(bgScanKey) ?? <String>[];
+    List<ScanBatch> backgroundBatches = stored
+        .map((str) => ScanBatch.fromSummary(jsonDecode(str)))
+        .toList();
+    // Clear the stored background batches after loading.
+    await prefs.remove(bgScanKey);
+    setState(() {
+      _scanBatches.addAll(backgroundBatches);
+      // Sort by timestamp so that the graph is chronological.
+      _scanBatches.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    });
+  }
+
   /// Request necessary permissions.
   Future<bool> _checkPermissions() async {
     if (Platform.isIOS) {
-      // // Request Bluetooth scanning permission for iOS.
-      debugPrint("Requesting bluetooth permission");
-      // await Permission.bluetooth.request();
-      debugPrint("Requesting locations permission");
-      // try {
-        await Permission.bluetooth.request().then((bluetoothReponse) async {
-          if(bluetoothReponse.isGranted){
-            await FlutterBluePlus.adapterState.where((val) => val == BluetoothAdapterState.on).first;
-            permissions = await Permission.location.request();
-          }
-        });
-      // } catch (e) {
-      //   debugPrint(e.toString());
-      // }
-      // debugPrint("both responses: $bothResponses");
+      debugPrint("Requesting bluetooth and location permissions on iOS");
+      await Permission.bluetooth.request();
+      permissions = await Permission.location.request();
       return permissions.isGranted;
     } else {
       var locationStatus = await Permission.location.request();
@@ -167,22 +222,40 @@ class HomePageState extends State<HomePage> {
     }
   }
 
-  /// Perform a Bluetooth scan and store raw results as a ScanBatch.
+
+
   Future<void> _performScan() async {
+    // If a scan is already in progress, do not start a new one.
+    if (_isScanning) return;
+    setState(() {
+      _isScanning = true;
+    });
+
     List<ScanResult> results = [];
+    // Start scanning for 5 seconds.
     FlutterBluePlus.startScan(timeout: Duration(seconds: 5));
+
+    // Listen for scan results, but do not update UI here.
     var subscription = FlutterBluePlus.scanResults.listen((scanResults) {
       results = scanResults;
     });
+
+    // Wait 5 seconds for the scan to complete.
     await Future.delayed(Duration(seconds: 5));
     FlutterBluePlus.stopScan();
     subscription.cancel();
 
+    // Process the scan results as needed (e.g. remove duplicates).
+    // (Your processing logic here remains unchanged.)
+
+    // Finally, update the UI exactly once with the new results.
     setState(() {
       devices = results;
       _scanBatches.add(ScanBatch(timestamp: DateTime.now(), results: results));
+      _isScanning = false; // Mark scan complete.
     });
   }
+
 
   /// Build a simple line chart using fl_chart.
   Widget _buildLineChart(List<FlSpot> spots, String title, String yAxisLabel) {
@@ -235,25 +308,33 @@ class HomePageState extends State<HomePage> {
   }
 
   /// Build chart data for "Number of Devices" over time.
+  /// (For each ScanBatch, use either the raw results or the stored summary.)
   List<FlSpot> _getDeviceCountSpots() {
     List<FlSpot> spots = [];
     for (int i = 0; i < _scanBatches.length; i++) {
-      // Compute count based on filter.
-      List<ScanResult> batchResults = _scanBatches[i].results;
-      if (_searchQuery.isNotEmpty) {
-        double? queryRssi = double.tryParse(_searchQuery);
-        if (queryRssi != null) {
-          batchResults = batchResults.where((result) => result.rssi <= queryRssi).toList();
-        } else {
-          batchResults = batchResults.where((result) {
-            String deviceName = result.device.advName.isNotEmpty
-                ? result.device.advName
-                : result.device.remoteId.str;
-            return deviceName.toLowerCase().contains(_searchQuery.toLowerCase());
-          }).toList();
+      int count = 0;
+      ScanBatch batch = _scanBatches[i];
+      // If this batch has raw results, we can filter if needed.
+      if (batch.results != null) {
+        List<ScanResult> batchResults = batch.results!;
+        if (_searchQuery.isNotEmpty) {
+          double? queryRssi = double.tryParse(_searchQuery);
+          if (queryRssi != null) {
+            batchResults = batchResults.where((result) => result.rssi <= queryRssi).toList();
+          } else {
+            batchResults = batchResults.where((result) {
+              String deviceName = result.device.advName.isNotEmpty
+                  ? result.device.advName
+                  : result.device.remoteId.str;
+              return deviceName.toLowerCase().contains(_searchQuery.toLowerCase());
+            }).toList();
+          }
         }
+        count = batchResults.length;
+      } else {
+        // For background batches, use stored summary.
+        count = batch.count ?? 0;
       }
-      int count = batchResults.length;
       spots.add(FlSpot(i.toDouble(), count.toDouble()));
     }
     return spots;
@@ -263,23 +344,29 @@ class HomePageState extends State<HomePage> {
   List<FlSpot> _getAvgRssiSpots() {
     List<FlSpot> spots = [];
     for (int i = 0; i < _scanBatches.length; i++) {
-      List<ScanResult> batchResults = _scanBatches[i].results;
-      if (_searchQuery.isNotEmpty) {
-        double? queryRssi = double.tryParse(_searchQuery);
-        if (queryRssi != null) {
-          batchResults = batchResults.where((result) => result.rssi <= queryRssi).toList();
-        } else {
-          batchResults = batchResults.where((result) {
-            String deviceName = result.device.advName.isNotEmpty
-                ? result.device.advName
-                : result.device.remoteId.str;
-            return deviceName.toLowerCase().contains(_searchQuery.toLowerCase());
-          }).toList();
+      double avgRssi = 0;
+      ScanBatch batch = _scanBatches[i];
+      if (batch.results != null) {
+        List<ScanResult> batchResults = batch.results!;
+        if (_searchQuery.isNotEmpty) {
+          double? queryRssi = double.tryParse(_searchQuery);
+          if (queryRssi != null) {
+            batchResults = batchResults.where((result) => result.rssi <= queryRssi).toList();
+          } else {
+            batchResults = batchResults.where((result) {
+              String deviceName = result.device.advName.isNotEmpty
+                  ? result.device.advName
+                  : result.device.remoteId.str;
+              return deviceName.toLowerCase().contains(_searchQuery.toLowerCase());
+            }).toList();
+          }
         }
+        int count = batchResults.length;
+        int sumRssi = batchResults.fold(0, (prev, element) => prev + element.rssi);
+        avgRssi = count > 0 ? sumRssi / count : 0;
+      } else {
+        avgRssi = batch.avgRssi ?? 0;
       }
-      int count = batchResults.length;
-      int sumRssi = batchResults.fold(0, (prev, element) => prev + element.rssi);
-      double avgRssi = count > 0 ? sumRssi / count : 0;
       spots.add(FlSpot(i.toDouble(), avgRssi));
     }
     return spots;
@@ -287,7 +374,7 @@ class HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
-    // Filter devices for list view.
+    // Filter devices for list view (foreground scan results).
     final filteredDevices = devices.where((device) {
       if (_searchQuery.isEmpty) return true;
       double? queryRssi = double.tryParse(_searchQuery);
@@ -357,7 +444,8 @@ class HomePageState extends State<HomePage> {
                   title: Text(result.device.advName.isNotEmpty
                       ? result.device.advName
                       : "Unknown Device"),
-                  subtitle: Text('ID: ${result.device.remoteId.str}'),
+                  subtitle:
+                  Text('ID: ${result.device.remoteId.str}'),
                   trailing: Text('RSSI: ${result.rssi}'),
                 );
               },
@@ -376,7 +464,7 @@ class HomePageState extends State<HomePage> {
           ],
         ),
       ),
-      // FAB toggles search field visibility, scrolls to top, activates the keyboard,
+      // Floating action button toggles search field visibility, scrolls to top, activates the keyboard,
       // and clears the filter if the search field is hidden.
       floatingActionButton: FloatingActionButton(
         onPressed: () {

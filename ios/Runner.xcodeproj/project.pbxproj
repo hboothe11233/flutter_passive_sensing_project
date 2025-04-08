@@ -15,7 +15,7 @@
 		97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FD1CF9000F007C117D /* Assets.xcassets */; };
 		97C147011CF9000F007C117D /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */; };
 		AA62EB068F66FCFBAA0F49FC /* Pods_RunnerTests.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8C9FAD430D49F476996B5715 /* Pods_RunnerTests.framework */; };
-		C2A8F71175C53E92AFD54623 /* Pods_Runner.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8041E90EE119F2A6079AABF4 /* Pods_Runner.framework */; };
+		C2A8F71175C53E92AFD54623 /* Pods_Runner.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8041E90EE119F2A6079AABF4 /* Pods_Runner.framework */; settings = {ATTRIBUTES = (Weak, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
