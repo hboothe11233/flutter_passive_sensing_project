@@ -67,6 +67,7 @@ class HomeController extends ChangeNotifier {
       try {
         await Permission.bluetooth.request().then((bluetoothResponse) async {
           if (bluetoothResponse.isGranted) {
+            await Permission.backgroundRefresh.request(); // only needed for iOS
             await FlutterBluePlus.adapterState
                 .where((val) => val == BluetoothAdapterState.on)
                 .first;
@@ -80,7 +81,6 @@ class HomeController extends ChangeNotifier {
       return permissions.isGranted;
     } else {
       var locationStatus = await Permission.location.request();
-      await Permission.backgroundRefresh.request();
       return locationStatus.isGranted;
     }
   }
