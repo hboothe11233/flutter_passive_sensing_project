@@ -34,9 +34,8 @@ class HomeController extends ChangeNotifier {
   Future<void> loadStoredBatches() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     List<String> stored = prefs.getStringList('all_scan_batches') ?? [];
-    List<ScanBatch> storedBatches = stored
-        .map((str) => ScanBatch.fromJson(jsonDecode(str)))
-        .toList();
+    List<ScanBatch> storedBatches =
+        stored.map((str) => ScanBatch.fromJson(jsonDecode(str))).toList();
     await prefs.remove('all_scan_batches');
     _scanBatches.addAll(storedBatches);
     _scanBatches.sort((a, b) => a.timestamp.compareTo(b.timestamp));
@@ -47,7 +46,7 @@ class HomeController extends ChangeNotifier {
   Future<void> saveBatches() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     List<String> toStore =
-    _scanBatches.map((batch) => jsonEncode(batch.toJson())).toList();
+        _scanBatches.map((batch) => jsonEncode(batch.toJson())).toList();
     await prefs.setStringList('all_scan_batches', toStore);
   }
 
@@ -63,8 +62,21 @@ class HomeController extends ChangeNotifier {
   /// Checks necessary permissions.
   Future<bool> checkPermissions() async {
     if (Platform.isIOS) {
-      await Permission.bluetooth.request();
-      permissions = await Permission.location.request();
+      /// Request Bluetooth and locations scanning permission for iOS.
+      List<PermissionStatus> bothResponses = [];
+      try {
+        await Permission.bluetooth.request().then((bluetoothResponse) async {
+          if (bluetoothResponse.isGranted) {
+            await FlutterBluePlus.adapterState
+                .where((val) => val == BluetoothAdapterState.on)
+                .first;
+            permissions = await Permission.location.request();
+          }
+        });
+      } catch (e) {
+        debugPrint(e.toString());
+      }
+      debugPrint("both responses: $bothResponses");
       return permissions.isGranted;
     } else {
       var locationStatus = await Permission.location.request();
@@ -89,7 +101,7 @@ class HomeController extends ChangeNotifier {
     subscription.cancel();
 
     List<ScanResultModel> models =
-    results.map((r) => ScanResultModel.fromScanResult(r)).toList();
+        results.map((r) => ScanResultModel.fromScanResult(r)).toList();
     ScanBatch newBatch = ScanBatch(timestamp: DateTime.now(), results: models);
 
     devices = results;
