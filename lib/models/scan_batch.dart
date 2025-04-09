@@ -1,4 +1,4 @@
-// models.dart
+// scan_batch.dart
 import 'package:flutter_passive_sensing_project/models/scan_result_model.dart';
 
 /// A model storing a batch of scan results with timestamp.
@@ -12,17 +12,27 @@ class ScanBatch {
   });
 
   Map<String, dynamic> toJson() {
-    return {
+    return <String, dynamic>{
       'timestamp': timestamp.toIso8601String(),
-      'results': results.map((r) => r.toJson()).toList(),
+      'results': results.map((ScanResultModel r) => r.toJson()).toList(),
     };
   }
 
   factory ScanBatch.fromJson(Map<String, dynamic> json) {
+    final String? timestampStr = json['timestamp'] as String?;
+    final List<dynamic>? resultsList = json['results'] as List<dynamic>?;
+
+    if (timestampStr == null) {
+      throw Exception("Missing 'timestamp' in JSON");
+    }
+    if (resultsList == null) {
+      throw Exception("Missing 'results' in JSON");
+    }
+
     return ScanBatch(
-      timestamp: DateTime.parse(json['timestamp']),
-      results: (json['results'] as List)
-          .map((r) => ScanResultModel.fromJson(r as Map<String, dynamic>))
+      timestamp: DateTime.parse(timestampStr),
+      results: resultsList
+          .map((dynamic r) => ScanResultModel.fromJson(r as Map<String, dynamic>))
           .toList(),
     );
   }

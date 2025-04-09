@@ -1,6 +1,5 @@
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
-
 /// A serializable model representing a single scan result.
 class ScanResultModel {
   final String deviceId;
@@ -22,7 +21,7 @@ class ScanResultModel {
   }
 
   Map<String, dynamic> toJson() {
-    return {
+    return <String, dynamic>{
       'deviceId': deviceId,
       'deviceName': deviceName,
       'rssi': rssi,
@@ -30,10 +29,24 @@ class ScanResultModel {
   }
 
   factory ScanResultModel.fromJson(Map<String, dynamic> json) {
+    final String? deviceId = json['deviceId'] as String?;
+    final String? deviceName = json['deviceName'] as String?;
+    final int? rssi = json['rssi'] as int?;
+
+    if (deviceId == null) {
+      throw Exception("Missing 'deviceId' in JSON");
+    }
+    if (deviceName == null) {
+      throw Exception("Missing 'deviceName' in JSON");
+    }
+    if (rssi == null) {
+      throw Exception("Missing 'rssi' in JSON");
+    }
+
     return ScanResultModel(
-      deviceId: json['deviceId'],
-      deviceName: json['deviceName'],
-      rssi: json['rssi'],
+      deviceId: deviceId,
+      deviceName: deviceName,
+      rssi: rssi,
     );
   }
 }
