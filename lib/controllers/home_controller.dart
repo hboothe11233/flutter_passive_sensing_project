@@ -92,10 +92,13 @@ class HomeController extends ChangeNotifier {
     notifyListeners();
 
     List<ScanResult> results = [];
+    //Using a timeout helps keep the scans relevant and reduces battery usage
     FlutterBluePlus.startScan(timeout: Duration(seconds: 5));
     var subscription = FlutterBluePlus.scanResults.listen((scanResults) {
       results = scanResults;
     });
+    //Adding a delay stops additional app features from being processed, further reducing battery usage
+    //allowing scan results to be gathered prior to continuing
     await Future.delayed(Duration(seconds: 5));
     FlutterBluePlus.stopScan();
     subscription.cancel();
